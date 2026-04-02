@@ -1,12 +1,13 @@
 """Alert rule engine per SPEC section 4."""
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AlertHistory, HourlyStat
+from app.models import AlertHistory, HourlyStat, SystemConfig
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,25 @@ DEFAULT_THRESHOLDS = {
     "affected_users_uv": 100,
     "cooldown_hours": 2,
 }
+
+
+THRESHOLD_PREFIX = "thresholds."
+
+
+async def load_thresholds(session: AsyncSession) -> dict:
+    """Load user-configured thresholds from system_config table."""
+    result = await session.execute(
+        select(SystemConfig).where(SystemConfig.key.like(f"{THRESHOLD_PREFIX}%"))
+    )
+    rows = result.scalars().all()
+    thresholds = {}
+    for row in rows:
+        key = row.key[len(THRESHOLD_PREFIX):]
+        value = row.value
+        if isinstance(value, str):
+            value = json.loads(value)
+        thresholds[key] = float(value)
+    return thresholds
 
 
 async def evaluate_alerts(

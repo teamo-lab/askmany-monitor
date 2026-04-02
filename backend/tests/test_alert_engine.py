@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
-from app.models import AlertHistory, HourlyStat
-from app.services.alert_engine import evaluate_alerts
+from app.models import AlertHistory, HourlyStat, SystemConfig
+from app.services.alert_engine import evaluate_alerts, load_thresholds
 
 
 @pytest.fixture
@@ -128,3 +128,58 @@ class TestAlertEngine:
         rules = alerts[0]["rules_triggered"]
         assert "block_rate" in rules
         assert "affected_users" not in rules
+
+    async def test_custom_thresholds_trigger_alert(self, db_session):
+        """User-configured lower threshold should trigger alert that defaults would miss."""
+        now = datetime(2026, 4, 2, 16, 0, 0, tzinfo=timezone.utc)
+        stat = HourlyStat(
+            timestamp_utc=now,
+            weekday=now.weekday(),
+            hour_utc=now.hour,
+            total_requests=10000,
+            blocked_count=60,  # 0.6% block rate — below default 3.5%, above custom 0.5%
+            block_rate=0.006,
+            user_uv=30,
+            conv_uv=40,
+            categories={"abuse": 30},
+            directions={"output": 40},
+        )
+        db_session.add(stat)
+        await db_session.commit()
+
+        # With defaults (3.5%), no alert
+        alerts = await evaluate_alerts(now, db_session)
+        assert len(alerts) == 0
+
+        # Clean up the alert history for re-evaluation
+        # With user-configured threshold (0.5%), alert triggers
+        custom = {"block_rate_pct": 0.5}
+        alerts = await evaluate_alerts(now, db_session, thresholds=custom)
+        assert len(alerts) == 1
+        assert "block_rate" in alerts[0]["rules_triggered"]
+
+
+class TestLoadThresholds:
+    async def test_load_thresholds_from_system_config(self, db_session):
+        """_load_thresholds reads thresholds.* keys and strips prefix."""
+        db_session.add(SystemConfig(key="thresholds.block_rate_pct", value=0.5))
+        db_session.add(SystemConfig(key="thresholds.min_blocked_count", value=10))
+        db_session.add(SystemConfig(key="other.setting", value="ignored"))
+        await db_session.commit()
+
+        thresholds = await load_thresholds(db_session)
+        assert thresholds == {"block_rate_pct": 0.5, "min_blocked_count": 10.0}
+
+    async def test_load_thresholds_string_values(self, db_session):
+        """String-encoded JSON values are parsed to float."""
+        db_session.add(SystemConfig(key="thresholds.block_rate_pct", value="0.5"))
+        await db_session.commit()
+
+        thresholds = await load_thresholds(db_session)
+        assert thresholds["block_rate_pct"] == 0.5
+        assert isinstance(thresholds["block_rate_pct"], float)
+
+    async def test_load_thresholds_empty(self, db_session):
+        """No thresholds configured returns empty dict."""
+        thresholds = await load_thresholds(db_session)
+        assert thresholds == {}

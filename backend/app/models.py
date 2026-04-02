@@ -14,7 +14,11 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import ARRAY as PG_ARRAY
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+# PostgreSQL uses ARRAY(String), SQLite falls back to JSON for testing
+NotifiedViaType = JSON().with_variant(PG_ARRAY(String(50)), "postgresql")
 
 TZDateTime = DateTime(timezone=True)
 
@@ -70,7 +74,7 @@ class AlertHistory(Base):
     severity: Mapped[str] = mapped_column(String(4), nullable=False)
     rules_triggered: Mapped[dict] = mapped_column(JSON, nullable=False)
     details: Mapped[dict] = mapped_column(JSON, nullable=False)
-    notified_via: Mapped[list] = mapped_column(JSON, default=list)
+    notified_via: Mapped[list] = mapped_column(NotifiedViaType, default=list)
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     acknowledged_by: Mapped[str | None] = mapped_column(String(100))
     acknowledged_at: Mapped[datetime | None] = mapped_column(TZDateTime)

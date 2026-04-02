@@ -139,6 +139,78 @@ class TestAlertsAPI:
         assert resp.json()["acknowledged"] is True
 
 
+class TestEvaluateAPI:
+    async def test_evaluate_no_data(self, client):
+        resp = await client.post("/api/alerts/evaluate", json={})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["alerts"] == []
+        assert "target_hour" in data
+
+    async def test_evaluate_with_target_hour(self, client, db_session):
+        """Evaluate with explicit target_hour and data that triggers alert."""
+        target = datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
+        stat = HourlyStat(
+            timestamp_utc=target,
+            weekday=target.weekday(),
+            hour_utc=target.hour,
+            total_requests=10000,
+            blocked_count=500,
+            block_rate=0.05,  # 5% > 3.5% default
+            user_uv=200,
+            conv_uv=300,
+            categories={"abuse": 300},
+            directions={"output": 400},
+        )
+        db_session.add(stat)
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/alerts/evaluate",
+            json={"target_hour": "2026-04-02T10:00:00+00:00"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["target_hour"] == "2026-04-02T10:00:00+00:00"
+        assert len(data["alerts"]) == 1
+        assert "block_rate" in data["alerts"][0]["rules_triggered"]
+
+    async def test_evaluate_uses_custom_thresholds(self, client, db_session):
+        """Evaluate picks up user-configured thresholds from system_config."""
+        target = datetime(2026, 4, 2, 11, 0, 0, tzinfo=timezone.utc)
+        stat = HourlyStat(
+            timestamp_utc=target,
+            weekday=target.weekday(),
+            hour_utc=target.hour,
+            total_requests=10000,
+            blocked_count=60,
+            block_rate=0.006,  # 0.6% — below default 3.5%, above custom 0.5%
+            user_uv=30,
+            conv_uv=40,
+            categories={"abuse": 30},
+            directions={"output": 40},
+        )
+        db_session.add(stat)
+        db_session.add(SystemConfig(key="thresholds.block_rate_pct", value=0.5))
+        await db_session.commit()
+
+        resp = await client.post(
+            "/api/alerts/evaluate",
+            json={"target_hour": "2026-04-02T11:00:00+00:00"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data["alerts"]) == 1
+        assert data["thresholds_applied"]["block_rate_pct"] == 0.5
+
+    async def test_evaluate_invalid_target_hour(self, client):
+        resp = await client.post(
+            "/api/alerts/evaluate",
+            json={"target_hour": "not-a-date"},
+        )
+        assert resp.status_code == 400
+
+
 class TestConfigAPI:
     async def test_get_config(self, client, seed_config):
         resp = await client.get("/api/config")

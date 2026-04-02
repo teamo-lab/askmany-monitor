@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.config import settings
 from app.database import AsyncSessionLocal
-from app.services.alert_engine import evaluate_alerts
+from app.services.alert_engine import evaluate_alerts, load_thresholds
 from app.services.cls_collector import CLSCollector
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,8 @@ async def run_hourly_collection():
 
         async with AsyncSessionLocal() as session:
             await collector.collect_hourly(target_hour, session)
-            await evaluate_alerts(target_hour, session)
+            thresholds = await load_thresholds(session)
+            await evaluate_alerts(target_hour, session, thresholds=thresholds)
 
         logger.info("Hourly collection completed for %s", target_hour.isoformat())
     except Exception:

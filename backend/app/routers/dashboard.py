@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_session
 from app.models import AlertHistory, ForbiddenEvent, SystemConfig
+from app.services.alert_engine import evaluate_alerts, load_thresholds
 from app.services.dashboard import get_hourly, get_overview
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
@@ -168,6 +169,32 @@ async def alerts_list(
             }
             for r in rows
         ]
+    }
+
+
+@router.post("/alerts/evaluate")
+async def evaluate_alerts_endpoint(
+    body: dict | None = None,
+    session: AsyncSession = Depends(get_session),
+):
+    now = datetime.now(timezone.utc)
+    target_hour = now.replace(minute=0, second=0, microsecond=0)
+
+    if body and body.get("target_hour"):
+        try:
+            target_hour = datetime.fromisoformat(body["target_hour"])
+            if target_hour.tzinfo is None:
+                target_hour = target_hour.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid target_hour format")
+
+    thresholds = await load_thresholds(session)
+    alerts = await evaluate_alerts(target_hour, session, thresholds=thresholds)
+
+    return {
+        "target_hour": target_hour.isoformat(),
+        "alerts": alerts,
+        "thresholds_applied": thresholds,
     }
 
 
