@@ -8,11 +8,13 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   RobotOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { TimeRangeProvider } from './context/TimeRangeContext';
 import { DrilldownProvider } from './context/DrilldownContext';
 import { TimeRangeSelector } from './components/TimeRangeSelector';
 import { ForbiddenWordPage } from './pages/ForbiddenWordPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { ComingSoonPage } from './pages/ComingSoonPage';
 
 const { Header, Sider, Content } = Layout;
@@ -27,6 +29,7 @@ function AppLayout() {
     { key: '/', icon: <AlertOutlined />, label: '违禁词监控' },
     { key: '/api-monitor', icon: <ApiOutlined />, label: 'API 监控' },
     { key: '/model-usage', icon: <RobotOutlined />, label: '模型调用' },
+    { key: '/settings', icon: <SettingOutlined />, label: '告警配置' },
   ];
 
   return (
@@ -71,6 +74,7 @@ function AppLayout() {
             <Route path="/" element={<ForbiddenWordPage />} />
             <Route path="/api-monitor" element={<ComingSoonPage title="API 监控" />} />
             <Route path="/model-usage" element={<ComingSoonPage title="模型调用" />} />
+            <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </Content>
       </Layout>
