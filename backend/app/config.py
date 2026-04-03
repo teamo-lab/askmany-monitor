@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     tencent_secret_key: str = ""
     cls_region: str = "ap-hongkong"
     cls_topic_id: str = "b772faa9-3ca0-42a1-9a85-b64dd2826ea0"
+    cls_event_timezone_hours: int = 8
 
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 

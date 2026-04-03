@@ -3,11 +3,12 @@
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import ForbiddenEvent, HourlyStat
 
 logger = logging.getLogger(__name__)
@@ -122,7 +123,13 @@ class CLSCollector:
 
     async def collect_hourly(self, target_hour: datetime, session: AsyncSession):
         """Collect data for one hour and write to DB."""
-        from_ts = int(target_hour.timestamp() * 1000)
+        tz_offset = timezone(timedelta(hours=settings.cls_event_timezone_hours))
+        # CLS SearchLog API From/To are UTC millisecond timestamps, but source
+        # system writes event_time in UTC+N (e.g. UTC+8 for Beijing time).
+        # Add the configured offset so the query window covers the correct
+        # UTC range that corresponds to the source timezone hour.
+        offset_ms = settings.cls_event_timezone_hours * 3600 * 1000
+        from_ts = int(target_hour.timestamp() * 1000) + offset_ms
         to_ts = from_ts + 3600 * 1000
 
         hour_slot = target_hour.strftime("%Y-%m-%d %H:00")
@@ -183,7 +190,7 @@ class CLSCollector:
             blocked = stat["blocked_count"]
             rate = blocked / total if total > 0 else 0
 
-            ts = datetime.strptime(slot, "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+            ts = datetime.strptime(slot, "%Y-%m-%d %H:%M").replace(tzinfo=tz_offset).astimezone(timezone.utc)
 
             existing = await session.execute(
                 select(HourlyStat).where(HourlyStat.timestamp_utc == ts)
@@ -226,7 +233,7 @@ class CLSCollector:
             event = ForbiddenEvent(
                 event_time=datetime.strptime(
                     evt["event_time"].split(".")[0], "%Y-%m-%d %H:%M:%S"
-                ).replace(tzinfo=timezone.utc),
+                ).replace(tzinfo=tz_offset).astimezone(timezone.utc),
                 username=evt["username"],
                 conv_id=evt["conv_id"],
                 direction=evt["direction"],

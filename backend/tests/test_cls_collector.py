@@ -1,6 +1,6 @@
 """TDD Red phase: tests for CLS data collection service."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -115,7 +115,9 @@ class TestCollectHourly:
     async def test_collect_writes_hourly_stat(self, db_session, collector):
         target = datetime(2026, 4, 1, 14, 0, 0, tzinfo=timezone.utc)
 
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = [
                 # hourly stats
                 ['{"hour_slot": "2026-04-01 14:00", "blocked_count": "307", "user_uv": "67", "conv_uv": "120"}'],
@@ -146,7 +148,9 @@ class TestCollectHourly:
     async def test_collect_writes_events(self, db_session, collector):
         target = datetime(2026, 4, 1, 14, 0, 0, tzinfo=timezone.utc)
 
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = [
                 ['{"hour_slot": "2026-04-01 14:00", "blocked_count": "10", "user_uv": "5", "conv_uv": "8"}'],
                 ['{"hour_slot": "2026-04-01 14:00", "total_requests": "500"}'],
@@ -172,11 +176,15 @@ class TestCollectHourly:
             [], [], [],
         ]
 
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = mock_responses.copy()
             await collector.collect_hourly(target, db_session)
 
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = [
                 ['{"hour_slot": "2026-04-01 14:00", "blocked_count": "20", "user_uv": "10", "conv_uv": "15"}'],
                 ['{"hour_slot": "2026-04-01 14:00", "total_requests": "600"}'],
@@ -201,12 +209,16 @@ class TestCollectHourly:
             [event_record],
         ]
 
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = base_responses.copy()
             await collector.collect_hourly(target, db_session)
 
         # Second collection with same event
-        with patch.object(collector, "_query_cls") as mock_query:
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 0
             mock_query.side_effect = [
                 ['{"hour_slot": "2026-04-01 14:00", "blocked_count": "10", "user_uv": "5", "conv_uv": "8"}'],
                 ['{"hour_slot": "2026-04-01 14:00", "total_requests": "500"}'],
@@ -219,3 +231,31 @@ class TestCollectHourly:
         events = result.scalars().all()
         assert len(events) == 1  # deduped, not 2
         assert events[0].cls_log_id == "log-dedup-001"
+
+    async def test_collect_timezone_conversion(self, db_session, collector):
+        """When cls_event_timezone_hours=8, hour_slot 14:00 (UTC+8) should be stored as 06:00 UTC."""
+        target = datetime(2026, 4, 1, 6, 0, 0, tzinfo=timezone.utc)
+
+        with patch("app.services.cls_collector.settings") as mock_settings, \
+             patch.object(collector, "_query_cls") as mock_query:
+            mock_settings.cls_event_timezone_hours = 8
+            mock_query.side_effect = [
+                ['{"hour_slot": "2026-04-01 14:00", "blocked_count": "50", "user_uv": "10", "conv_uv": "20"}'],
+                ['{"hour_slot": "2026-04-01 14:00", "total_requests": "1000"}'],
+                [],
+                [],
+                ['{"event_time": "2026-04-01 14:05:30", "event_id": "output", "risk_level": "REJECT", "risk_description": "色情:色情描写:重度", "source": "shumei", "username": "#123", "conv_id": "c1", "text": "test"}'],
+            ]
+            await collector.collect_hourly(target, db_session)
+
+        expected_utc = datetime(2026, 4, 1, 6, 0, 0, tzinfo=timezone.utc)
+        result = await db_session.execute(
+            select(HourlyStat).where(HourlyStat.timestamp_utc == expected_utc)
+        )
+        stat = result.scalar_one()
+        assert stat.blocked_count == 50
+        assert stat.hour_utc == 6
+
+        result = await db_session.execute(select(ForbiddenEvent))
+        event = result.scalar_one()
+        assert event.event_time.replace(tzinfo=None) == datetime(2026, 4, 1, 6, 5, 30)
